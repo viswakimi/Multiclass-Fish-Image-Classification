@@ -1,0 +1,93 @@
+# Fish Image Classification
+
+## **1. Data Augmentation**
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+datagen = ImageDataGenerator(
+    rotation_range=30,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+
+## **2. Background Removal Function**
+
+import cv2
+import numpy as np
+
+def remove_background(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    result = cv2.bitwise_and(img, img, mask=mask)
+    return result
+
+## **3. Fine-Tuned EfficientNetB0 Model**
+
+import tensorflow as tf
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+
+base_model = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+for layer in base_model.layers[:-20]:
+    layer.trainable = False
+
+x = GlobalAveragePooling2D()(base_model.output)
+x = Dense(512, activation='relu')(x)
+x = Dense(11, activation='softmax')
+
+model = Model(inputs=base_model.input, outputs=x)
+
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+model.fit(train_generator, validation_data=val_generator, epochs=20)
+
+## **4. Hyperparameter Optimization with KerasTuner**
+
+import keras_tuner as kt
+
+def build_model(hp):
+    model = tf.keras.Sequential([
+        EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3)),
+        GlobalAveragePooling2D(),
+        Dense(hp.Int('units', min_value=256, max_value=1024, step=128), activation='relu'),
+        Dense(11, activation='softmax')
+    ])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(hp.Choice('learning_rate', [1e-3, 1e-4, 1e-5])),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
+
+tuner = kt.BayesianOptimization(build_model, objective='val_accuracy', max_trials=10)
+tuner.search(train_generator, validation_data=val_generator, epochs=10)
+best_hp = tuner.get_best_hyperparameters()[0]
+print(best_hp)
+
+## **5. Ensemble Learning**
+
+import numpy as np
+from tensorflow.keras.models import load_model
+
+model1 = load_model("efficientnetb0_model.h5")
+model2 = load_model("inceptionv3_model.h5")
+model3 = load_model("resnet50_model.h5")
+
+def ensemble_predict(image):
+    img = preprocess_image(image)
+    preds1 = model1.predict(img)
+    preds2 = model2.predict(img)
+    preds3 = model3.predict(img)
+    final_pred = (preds1 + preds2 + preds3) / 3
+    return np.argmax(final_pred)
+
+predicted_class = ensemble_predict("fish_example.jpg")
+print("Predicted class:", predicted_class)
